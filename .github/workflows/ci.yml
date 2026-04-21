@@ -1,0 +1,286 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  CACHE_KEY: node-modules-${{ hashFiles('**/package-lock.json') }}
+  CACHE_PATHS: |
+    node_modules
+    apps/*/node_modules
+    services/*/node_modules
+    packages/*/node_modules
+    tests/*/node_modules
+
+jobs:
+  # ── 1. Install ────────────────────────────────────────────────────────────────
+  install:
+    name: Install
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ env.CACHE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ env.CACHE_KEY }}
+
+  # ── 2. Lint ───────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ needs.install.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - run: npx turbo run lint --concurrency=4
+
+  # ── 3. Type-check ─────────────────────────────────────────────────────────────
+  type-check:
+    name: Type Check
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ needs.install.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - run: npx turbo run type-check --concurrency=4
+
+  # ── 4. Unit tests ─────────────────────────────────────────────────────────────
+  unit-test:
+    name: Unit Tests
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ needs.install.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - run: npx turbo run test --concurrency=4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-coverage
+          path: '**/coverage/'
+          retention-days: 7
+
+  # ── 5. Integration tests ──────────────────────────────────────────────────────
+  integration-test:
+    name: Integration Tests
+    needs: [lint, type-check, unit-test]
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:6
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 6
+    env:
+      MONGODB_URI: mongodb://localhost:27017/merchant360_test
+      MONGODB_DB: merchant360_test
+      LOG_LEVEL: warn
+      PAYMENT_SERVICE_URL: http://localhost:4001
+      REFUND_SERVICE_URL: http://localhost:4002
+      MERCHANT_SERVICE_URL: http://localhost:4003
+      GRAPHQL_GATEWAY_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ needs.install.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Build services
+        run: npx turbo run build --filter=payment-service --filter=refund-service --filter=merchant-service --filter=notification-service --filter=graphql-gateway --concurrency=5
+      - name: Start services
+        run: |
+          PORT=4001 node services/payment-service/dist/index.js &
+          PORT=4002 node services/refund-service/dist/index.js &
+          PORT=4003 node services/merchant-service/dist/index.js &
+          PORT=4004 node services/notification-service/dist/index.js &
+          PORT=4000 node services/graphql-gateway/dist/index.js &
+      - name: Wait for services
+        run: |
+          for port in 4000 4001 4002 4003 4004; do
+            echo "Waiting for :$port..."
+            until curl -sf "http://localhost:$port/health" > /dev/null 2>&1; do
+              sleep 1
+            done
+            echo ":$port ready"
+          done
+      - name: Run API integration tests
+        run: npx vitest run --config tests/api/vitest.config.ts
+      - name: Run GraphQL integration tests
+        run: npx vitest run --config tests/graphql/vitest.config.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-test-results
+          path: '**/test-results/'
+          retention-days: 7
+
+  # ── 6. Playwright E2E ─────────────────────────────────────────────────────────
+  playwright:
+    name: Playwright E2E
+    needs: [lint, type-check, unit-test]
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:6
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 6
+      keycloak:
+        image: quay.io/keycloak/keycloak:24.0
+        ports: ['8080:8080']
+        env:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: admin
+          KC_HEALTH_ENABLED: 'true'
+        options: >-
+          --health-cmd "curl -sf http://localhost:8080/health/ready"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 8
+    env:
+      MONGODB_URI: mongodb://localhost:27017/merchant360_e2e
+      MONGODB_DB: merchant360_e2e
+      LOG_LEVEL: warn
+      KEYCLOAK_URL: http://localhost:8080
+      KEYCLOAK_REALM: merchant360
+      KEYCLOAK_CLIENT_ID: merchant360-web
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-secret-not-for-production
+      PAYMENT_SERVICE_URL: http://localhost:4001
+      REFUND_SERVICE_URL: http://localhost:4002
+      MERCHANT_SERVICE_URL: http://localhost:4003
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_PATHS }}
+          key: ${{ needs.install.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/ui/package.json') }}
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: tests/ui
+      - name: Install Playwright system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+        working-directory: tests/ui
+      - name: Build web + services
+        run: npx turbo run build --filter=web --filter=payment-service --filter=refund-service --filter=merchant-service --filter=notification-service --concurrency=5
+      - name: Start backend services
+        run: |
+          PORT=4001 node services/payment-service/dist/index.js &
+          PORT=4002 node services/refund-service/dist/index.js &
+          PORT=4003 node services/merchant-service/dist/index.js &
+          PORT=4004 node services/notification-service/dist/index.js &
+      - name: Wait for backend services
+        run: |
+          for port in 4001 4002 4003 4004; do
+            until curl -sf "http://localhost:$port/health" > /dev/null 2>&1; do sleep 1; done
+          done
+      - name: Seed test data
+        run: node scripts/seed-test-data.js
+        env:
+          MONGODB_URI: mongodb://localhost:27017/merchant360_e2e
+      - name: Start Next.js
+        run: npx next start --port 3000 &
+        working-directory: apps/web
+        env:
+          PORT: 3000
+      - name: Wait for Next.js
+        run: |
+          until curl -sf http://localhost:3000 > /dev/null 2>&1; do sleep 1; done
+      - name: Run Playwright tests
+        run: npx playwright test
+        working-directory: tests/ui
+        env:
+          BASE_URL: http://localhost:3000
+          CI: true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: tests/ui/playwright-report/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-junit
+          path: tests/ui/test-results/junit.xml
+          retention-days: 14
+
+  # ── CI gate ───────────────────────────────────────────────────────────────────
+  ci-gate:
+    name: CI Gate
+    needs: [lint, type-check, unit-test, integration-test, playwright]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          results='${{ toJSON(needs) }}'
+          failed=$(echo "$results" | jq -r 'to_entries[] | select(.value.result != "success") | .key')
+          if [ -n "$failed" ]; then
+            echo "Failed jobs: $failed"
+            exit 1
+          fi
+          echo "All jobs passed."

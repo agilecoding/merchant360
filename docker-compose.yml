@@ -1,0 +1,252 @@
+x-service-common: &service-common
+  restart: unless-stopped
+  networks:
+    - m360
+
+x-service-healthcheck: &service-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 10s
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  mongo:
+    <<: *service-common
+    image: mongo:7.0
+    container_name: m360_mongo
+    ports:
+      - '27017:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}
+      MONGO_INITDB_DATABASE: merchant360
+    volumes:
+      - mongo_data:/data/db
+      - ./infra/mongo-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.runCommand({ ping: 1 })", '--username', '${MONGO_ROOT_USER:-admin}', '--password', '${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}', '--authenticationDatabase', 'admin']
+      <<: *service-healthcheck
+
+  mongo-seed:
+    image: mongo:7.0
+    container_name: m360_mongo_seed
+    networks:
+      - m360
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./infra/mongo-init:/scripts:ro
+    entrypoint: >
+      mongosh
+        --host mongo
+        -u ${MONGO_ROOT_USER:-admin}
+        -p ${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}
+        --authenticationDatabase admin
+        /scripts/seed.js
+    profiles: ['seed']
+
+  keycloak:
+    <<: *service-common
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: m360_keycloak
+    command: start-dev --import-realm
+    ports:
+      - '8080:8080'
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: 'true'
+      KC_METRICS_ENABLED: 'true'
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/localhost/8080 && echo -e "GET /health/ready HTTP/1.0\r\n\r\n" >&3 && grep -q "UP" <&3 || exit 1']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  keycloak-init:
+    image: curlimages/curl:latest
+    container_name: m360_keycloak_init
+    networks:
+      - m360
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - ./infra/keycloak-init.sh:/keycloak-init.sh:ro
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    entrypoint: sh /keycloak-init.sh
+    profiles: ['init']
+
+  # ── Backend Services ────────────────────────────────────────────────────────
+
+  payment-service:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.service
+      args:
+        SERVICE_DIR: services/payment-service
+    container_name: m360_payment
+    ports:
+      - '3001:3001'
+    environment:
+      PORT: '3001'
+      NODE_ENV: ${NODE_ENV:-production}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/health || exit 1']
+      <<: *service-healthcheck
+
+  refund-service:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.service
+      args:
+        SERVICE_DIR: services/refund-service
+    container_name: m360_refund
+    ports:
+      - '3002:3002'
+    environment:
+      PORT: '3002'
+      NODE_ENV: ${NODE_ENV:-production}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      PAYMENT_SERVICE_URL: http://payment-service:3001
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3002/health || exit 1']
+      <<: *service-healthcheck
+
+  merchant-service:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.service
+      args:
+        SERVICE_DIR: services/merchant-service
+    container_name: m360_merchant
+    ports:
+      - '3003:3003'
+    environment:
+      PORT: '3003'
+      NODE_ENV: ${NODE_ENV:-production}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3003/health || exit 1']
+      <<: *service-healthcheck
+
+  notification-service:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.service
+      args:
+        SERVICE_DIR: services/notification-service
+    container_name: m360_notification
+    ports:
+      - '3004:3004'
+    environment:
+      PORT: '3004'
+      NODE_ENV: ${NODE_ENV:-production}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3004/health || exit 1']
+      <<: *service-healthcheck
+
+  graphql-gateway:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.service
+      args:
+        SERVICE_DIR: services/graphql-gateway
+    container_name: m360_gateway
+    ports:
+      - '4000:4000'
+    environment:
+      PORT: '4000'
+      NODE_ENV: ${NODE_ENV:-production}
+      PAYMENT_SERVICE_URL: http://payment-service:3001
+      REFUND_SERVICE_URL: http://refund-service:3002
+      MERCHANT_SERVICE_URL: http://merchant-service:3003
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      payment-service:
+        condition: service_healthy
+      refund-service:
+        condition: service_healthy
+      merchant-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', "wget -qO- --header='Content-Type: application/json' --post-data='{\"query\":\"query { __typename }\"}' http://localhost:4000/graphql | grep -q \"__typename\" || exit 1"]
+      <<: *service-healthcheck
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+
+  web:
+    <<: *service-common
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.web
+    container_name: m360_web
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      # GraphQL: internal SSR URL uses Docker hostname; public URL uses localhost for browser
+      GRAPHQL_INTERNAL_URL: http://graphql-gateway:4000/graphql
+      NEXT_PUBLIC_GRAPHQL_URL: ${NEXT_PUBLIC_GRAPHQL_URL:-http://localhost:4000/graphql}
+      # NEXTAUTH_URL must be the browser-reachable URL — never a Docker hostname
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
+      # KEYCLOAK_URL: server→Keycloak (Docker internal)
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-http://keycloak:8080}
+      # KEYCLOAK_PUBLIC_URL: browser→Keycloak (must be localhost-reachable)
+      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-merchant360}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-web-client}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET is required}
+    depends_on:
+      graphql-gateway:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      <<: *service-healthcheck
+
+networks:
+  m360:
+    driver: bridge
+
+volumes:
+  mongo_data:
+    driver: local

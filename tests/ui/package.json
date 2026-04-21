@@ -1,0 +1,19 @@
+{
+    "name": "@merchant360/tests-ui",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "test": "playwright test",
+        "test:headed": "playwright test --headed",
+        "test:debug": "playwright test --debug",
+        "test:report": "playwright show-report ../../coverage/playwright",
+        "codegen": "playwright codegen http://localhost:3000"
+    },
+    "devDependencies": {
+        "@playwright/mcp": "^0.0.70",
+        "@playwright/test": "^1.47.0",
+        "@types/node": "^20.19.39",
+        "typescript": "^5.5.0"
+    },
+    "type": "module"
+}

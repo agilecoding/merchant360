@@ -1,0 +1,15 @@
+{
+  "name": "@merchant360/eslint-config",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {},
+  "peerDependencies": {
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

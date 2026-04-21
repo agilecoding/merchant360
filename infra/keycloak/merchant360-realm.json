@@ -1,0 +1,88 @@
+{
+  "realm": "merchant360",
+  "enabled": true,
+  "displayName": "Merchant360",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "web-client",
+      "name": "Merchant360 Web",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "kc-client-secret-change-in-prod",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:3000/api/auth/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "admin",    "description": "Full platform access" },
+      { "name": "analyst",  "description": "Read-only access" },
+      { "name": "merchant", "description": "Scoped to own merchant data" }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin@merchant360.dev",
+      "email": "admin@merchant360.dev",
+      "firstName": "Admin",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "analyst@merchant360.dev",
+      "email": "analyst@merchant360.dev",
+      "firstName": "Analyst",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "merchant@merchant360.dev",
+      "email": "merchant@merchant360.dev",
+      "firstName": "Merchant",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["merchant"]
+    }
+  ]
+}
