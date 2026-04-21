@@ -20,13 +20,13 @@ services:
       - '27017:27017'
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
       MONGO_INITDB_DATABASE: merchant360
     volumes:
       - mongo_data:/data/db
       - ./infra/mongo-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.runCommand({ ping: 1 })", '--username', '${MONGO_ROOT_USER:-admin}', '--password', '${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}', '--authenticationDatabase', 'admin']
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.runCommand({ ping: 1 })", '--username', '${MONGO_ROOT_USER:-admin}', '--password', '${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}', '--authenticationDatabase', 'admin']
       <<: *service-healthcheck
 
   mongo-seed:
@@ -43,7 +43,7 @@ services:
       mongosh
         --host mongo
         -u ${MONGO_ROOT_USER:-admin}
-        -p ${MONGO_ROOT_PASSWORD:-M3rchant_S3cr3t!}
+        -p ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
         --authenticationDatabase admin
         /scripts/seed.js
     profiles: ['seed']
@@ -57,7 +57,7 @@ services:
       - '8080:8080'
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_PASSWORD is required}
       KC_HEALTH_ENABLED: 'true'
       KC_METRICS_ENABLED: 'true'
     volumes:
@@ -81,7 +81,7 @@ services:
       - ./infra/keycloak-init.sh:/keycloak-init.sh:ro
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_PASSWORD is required}
     entrypoint: sh /keycloak-init.sh
     profiles: ['init']
 
@@ -100,7 +100,7 @@ services:
     environment:
       PORT: '3001'
       NODE_ENV: ${NODE_ENV:-production}
-      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:?MONGO_ROOT_PASSWORD@mongo:27017/merchant360?authSource=admin}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
@@ -123,7 +123,7 @@ services:
     environment:
       PORT: '3002'
       NODE_ENV: ${NODE_ENV:-production}
-      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:?MONGO_ROOT_PASSWORD@mongo:27017/merchant360?authSource=admin}
       PAYMENT_SERVICE_URL: http://payment-service:3001
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -149,7 +149,7 @@ services:
     environment:
       PORT: '3003'
       NODE_ENV: ${NODE_ENV:-production}
-      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:M3rchant_S3cr3t!@mongo:27017/merchant360?authSource=admin}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:?MONGO_ROOT_PASSWORD@mongo:27017/merchant360?authSource=admin}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
