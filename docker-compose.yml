@@ -250,3 +250,4 @@ networks:
 volumes:
   mongo_data:
     driver: local
+
