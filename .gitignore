@@ -57,3 +57,6 @@ keycloak-data/
 *.bak
 *.tmp
 *.orig
+
+# ── Miscellaneous ─────────────────────────────────────────────────────────────
+token.txt
